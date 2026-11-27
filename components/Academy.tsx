@@ -197,7 +197,17 @@ export default function Academy(){
 
     for(const x of c.items as any[]){
 
-     if(!x.str||!x.transform)continue;
+     if(!x.transform)continue;
+
+if(!x.str){
+ if(x.hasEOL){
+  pageText+=line.trim()+
+   (marked?" [RESPUESTA_MARCADA]":"")+"\n";
+  line="";
+  marked=false;
+ }
+ continue;
+}
 
      const px=x.transform[4];
      const py=x.transform[5];
