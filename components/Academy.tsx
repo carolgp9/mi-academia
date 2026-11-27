@@ -7,123 +7,44 @@ type T={id:string;title:string;source_name:string;questions:Q[];created_at:strin
 type R={id:string;test_title:string;score:number;correct:number;total:number;created_at:string};
 
 function parseTest(raw:string):Q[]{
- const text=raw
-  .replace(/\\n/g,"\n")
-  .replace(/\r/g,"\n")
-  .replace(/\u00a0/g," ")
-  .replace(/^\s*\d{1,3}\s*$/gm,"");
-
+ const text=raw.replace(/\\n/g,"\n").replace(/\r/g,"\n").replace(/\u00a0/g," ").replace(/\f/g,"\n").replace(/^[ \t]*\d{1,3}[ \t]*$/gm,"");
  const key:Record<number,string>={};
  let body=text;
-
- const section=text.match(
-  /(?:^|\n)[ \t]*(?:plantilla de respuestas|soluciones|respuestas correctas|clave de respuestas)[ \t]*[:.]?[ \t]*(?:\n|$)/i
- );
-
+ const section=text.match(/(?:^|\n)[ \t]*(?:plantilla de respuestas|soluciones|respuestas correctas|clave de respuestas)[ \t]*[:.]?[ \t]*(?:\n|$)/i);
  if(section&&section.index!==undefined){
-  const tail=text.slice(section.index+section[0].length);
-  for(const m of tail.matchAll(/\b(\d{1,4})\s*[.)\-:–]?\s*([a-j])\b/gi)){
-   key[+m[1]]=m[2].toLowerCase();
-  }
-  if(Object.keys(key).length){
-   body=text.slice(0,section.index);
-  }
+  for(const m of text.slice(section.index+section[0].length).matchAll(/\b(\d{1,4})\s*[.)\-:–]?\s*([a-j])\b/gi))key[+m[1]]=m[2].toLowerCase();
+  if(Object.keys(key).length)body=text.slice(0,section.index);
  }
-
- const starts=[...body.matchAll(
-  /(?:^|\n)[ \t]*(?:pregunta\s+)?(\d{1,4})[.)º:\-–][ \t]+(?=\S)/gi
- )];
-
+ const candidates=[...body.matchAll(/(?:^|\n)[ \t]*(?:pregunta[ \t]+)?(\d{1,4})[ \t]*[.)º:\-–][ \t]*(?=\S)/gi)];
+ const starts:RegExpMatchArray[]=[];
+ for(const m of candidates){if(!starts.length||+m[1]===+starts[starts.length-1][1]+1)starts.push(m);}
  const out:Q[]=[];
-
+ const clean=(s:string)=>s.replace(/\s+/g," ").trim();
+ const marker=/\s+(?=(?:Constituci[oó]n\s+Espa[ñn]ola\s+de\s+1978\s*:|(?:La\s+)?Constituci[oó]n\s+Espa[ñn]ola\s+de\s+1978\s+(?:fue\s*:|est[aá]\s+compuesta)|Caracter[ií]sticas\s+generales\s+de\s+la\s+Constituci[oó]n|Explicaci[oó]n\s*:|Justificaci[oó]n\s*:))/i;
  for(let i=0;i<starts.length;i++){
-  const m=starts[i];
-  const start=m.index!+m[0].length;
-  const end=starts[i+1]?.index??body.length;
-  let block=body.slice(start,end).trim();
-
-  const solution=block.match(
-   /(?:^|\n|\s)(?:respuesta\s+correcta|soluci[oó]n|correcta)\s*[:=\-]\s*([a-j])\b/i
-  );
-
-  if(solution&&solution.index!==undefined){
-   block=block.slice(0,solution.index).trim();
+  const m=starts[i];let block=body.slice(m.index!+m[0].length,starts[i+1]?.index??body.length).trim();
+  const sol=block.match(/(?:^|\n|\s)(?:respuesta\s+correcta|soluci[oó]n|correcta)\s*[:=\-]\s*([a-j])\b/i);
+  let explanation=sol?clean(block.slice(sol.index!+sol[0].length)).replace(/^\s*[.:–-]\s*/,""):"";
+  if(sol)block=block.slice(0,sol.index).trim();
+  const all=[...block.matchAll(/(?:^|\s)([a-j])[ \t]*[.)\-:][ \t]*(?=\S)/gi)];
+  const first=all.findIndex(o=>o[1].toLowerCase()==="a");if(first<0)continue;
+  const seq=[all[first]];
+  for(const o of all.slice(first+1)){
+   if(o[1].toLowerCase()!==String.fromCharCode(97+seq.length))continue;
+   const prev=seq[seq.length-1];const before=block.slice(prev.index!+prev[0].length,o.index);
+   // In this corrected format, an explanation may contain its own lettered list.
+   if(marker.test(before)&&seq.length>=3&&!/^\n[ \t]*[a-j][.)]/i.test(o[0]))continue;
+   if(marker.test(before)&&seq.length>=3&&/\bConstituci[oó]n\s+Espa[ñn]ola\s+de\s+1978/i.test(before))continue;
+   seq.push(o);
   }
-
-  const opts=[...block.matchAll(
-   /(?:^|\n)[ \t]*([a-j])[.)\-:][ \t]*(?=\S)/gi
-  )];
-
-  const first=opts.findIndex(
-   o=>o[1].toLowerCase()==="a"
-  );
-
-  if(first<0)continue;
-
-  const seq=[opts[first]];
-
-  for(let j=first+1;j<opts.length;j++){
-   if(opts[j][1].toLowerCase()===String.fromCharCode(97+seq.length)){
-    seq.push(opts[j]);
-   }
-  }
-
   if(seq.length<2)continue;
-
-  const question=block.slice(0,seq[0].index)
-   .replace(/\s+/g," ").trim();
-
-  let explanation="";
-  const detected:number[]=[];
-
-  const options=seq.map((o,j)=>{
-   let value=block.slice(
-    o.index!+o[0].length,
-    seq[j+1]?.index??block.length
-   ).replace(/\s+/g," ").trim();
-   
-      if(value.includes("[RESPUESTA_MARCADA]")){
-    detected.push(j);
-    value=value.replace(/\[RESPUESTA_MARCADA\]/g,"").trim();
-   }
-
-   const mark=value.match(
-    /\s+(?=(?:Constituci[oó]n Espa[ñn]ola de 1978\s*:|Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|La Constituci[oó]n Espa[ñn]ola de 1978 fue\s*:|La Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|Caracter[ií]sticas generales de la Constituci[oó]n|Explicaci[oó]n\s*:|Justificaci[oó]n\s*:))/i
-   );
-
-   if(mark&&mark.index!==undefined){
-    detected.push(j);
-    explanation=value.slice(mark.index).trim();
-    value=value.slice(0,mark.index).trim();
-   }
-
-   return value;
-  });
-
+  const question=clean(block.slice(0,seq[0].index));const detected:number[]=[];
+  const options=seq.map((o,j)=>{let value=clean(block.slice(o.index!+o[0].length,seq[j+1]?.index??block.length));const mark=value.match(marker);if(mark&&mark.index!==undefined){detected.push(j);explanation=value.slice(mark.index).trim();value=value.slice(0,mark.index).trim();}return value;});
   if(!question||options.some(o=>!o))continue;
-
-  const letter=solution?.[1].toLowerCase()||key[+m[1]];
-
-  let correctIndex=letter
-   ?letter.charCodeAt(0)-97
-   :new Set(detected).size===1?detected[0]:-1;
-
-  if(correctIndex<0||correctIndex>=options.length){
-   correctIndex=-1;
-  }
-
-  out.push({
-   question,
-   options,
-   correctIndex,
-   explanation:explanation||(
-    correctIndex<0
-    ?"Solución no detectada: selecciónala manualmente."
-    :"Respuesta detectada automáticamente."
-   )
-  });
+  const letter=sol?.[1].toLowerCase()||key[+m[1]];const idx=letter?letter.charCodeAt(0)-97:detected.length===1?detected[0]:-1;
+  const correctIndex=idx>=0&&idx<options.length?idx:-1;
+  out.push({question,options,correctIndex,explanation:explanation||(correctIndex<0?"Solución no detectada: selecciónala manualmente.":"Respuesta detectada automáticamente; compruébala.")});
  }
-
  return out;
 }
 
@@ -139,222 +60,8 @@ export default function Academy(){
  useEffect(()=>{if(view!=="exam"||done||seconds<=0)return;const id=setInterval(()=>Seconds(s=>{if(s<=1){clearInterval(id);finish();return 0}return s-1}),1000);return()=>clearInterval(id)},[view,done,seconds>0]);
  async function refresh(){const [t,r]=await Promise.all([supabase.from("tests").select("*").order("created_at",{ascending:false}),supabase.from("results").select("*").order("created_at",{ascending:false}).limit(50)]);Tests(t.data||[]);Results(r.data||[])}
  async function auth(e:React.FormEvent){e.preventDefault();const x=signup?await supabase.auth.signUp({email,password}):await supabase.auth.signInWithPassword({email,password});M(x.error?.message|| (signup?"Cuenta creada. Revisa tu correo si se solicita confirmación.":""))}
- async function readFile(file?:File){
- if(!file)return;
-
- Material("");
- Draft([]);
- Source(file.name);
- Title(file.name.replace(/\.[^.]+$/,""));
- M("Leyendo documento…");
-
- try{
-  let text="";
-
-  if(file.name.toLowerCase().endsWith(".pdf")){
-
-   const pdfjs=await import("pdfjs-dist");
-
-   pdfjs.GlobalWorkerOptions.workerSrc=
-    `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
-
-   const pdf=await pdfjs.getDocument({
-    data:await file.arrayBuffer()
-   }).promise;
-
-   const pages:string[]=[];
-
-   for(let i=1;i<=pdf.numPages;i++){
-
-    const p=await pdf.getPage(i);
-    const c=await p.getTextContent();
-    const annotations=await p.getAnnotations();
-
-    const viewport=p.getViewport({scale:2});
-    const canvas=document.createElement("canvas");
-
-    canvas.width=Math.ceil(viewport.width);
-    canvas.height=Math.ceil(viewport.height);
-
-    const ctx=canvas.getContext("2d",{
-     willReadFrequently:true
-    });
-
-    if(!ctx)throw Error("No se pudo analizar el PDF.");
-
-    await p.render({
-     canvasContext:ctx,
-     viewport
-    }).promise;
-
-    const pixels=ctx.getImageData(
-     0,0,canvas.width,canvas.height
-    ).data;
-
-    let pageText="";
-    let line="";
-    let marked=false;
-
-    for(const x of c.items as any[]){
-
-     if(!x.transform)continue;
-
-if(!x.str){
- if(x.hasEOL){
-  pageText+=line.trim()+
-   (marked?" [RESPUESTA_MARCADA]":"")+"\n";
-  line="";
-  marked=false;
- }
- continue;
-}
-
-     const px=x.transform[4];
-     const py=x.transform[5];
-     const w=x.width||0;
-     const h=x.height||10;
-
-     const annotated=annotations.some((a:any)=>{
-      if(!["Underline","Highlight"].includes(a.subtype))
-       return false;
-
-      const r=a.rect;
-      if(!r)return false;
-
-      return r[0]<px+w&&r[2]>px&&
-       r[1]<py+h&&r[3]>py-3;
-     });
-
-     const point=viewport.convertToViewportPoint(px,py);
-
-     const left=Math.max(0,Math.floor(point[0]));
-     const right=Math.min(
-      canvas.width-1,
-      Math.ceil(point[0]+w*2)
-     );
-
-     let underlined=false;
-     let highlighted=false;
-
-     if(right-left>12){
-
-      for(let offset=1;offset<=7;offset++){
-
-       const y=Math.round(point[1]+offset);
-
-       if(y<0||y>=canvas.height)continue;
-
-       let dark=0;
-
-       for(let xx=left;xx<right;xx++){
-
-        const k=(y*canvas.width+xx)*4;
-
-        if(pixels[k]<130&&
-           pixels[k+1]<130&&
-           pixels[k+2]<130){
-         dark++;
-        }
-       }
-
-       if(dark/(right-left)>0.75){
-        underlined=true;
-        break;
-       }
-      }
-
-      const y=Math.round(point[1]-h);
-
-      if(y>=0&&y<canvas.height){
-
-       let colored=0;
-
-       for(let xx=left;xx<right;xx++){
-
-        const k=(y*canvas.width+xx)*4;
-
-        const r=pixels[k];
-        const g=pixels[k+1];
-        const b=pixels[k+2];
-
-        if(Math.max(r,g,b)-Math.min(r,g,b)>45&&
-           Math.max(r,g,b)>150){
-         colored++;
-        }
-       }
-
-       highlighted=colored/(right-left)>0.5;
-      }
-     }
-
-     line+=x.str+" ";
-
-     if(annotated||underlined||highlighted){
-      marked=true;
-     }
-
-     if(x.hasEOL){
-
-      const clean=line.trim();
-
-      pageText+=clean+
-       (marked?" [RESPUESTA_MARCADA]":"")+"\n";
-
-      line="";
-      marked=false;
-     }
-    }
-
-    if(line.trim()){
-     pageText+=line.trim()+
-      (marked?" [RESPUESTA_MARCADA]":"")+"\n";
-    }
-
-    pages.push(pageText);
-
-    canvas.width=0;
-    canvas.height=0;
-   }
-
-   text=pages.join("\n");
-
-  }else if(file.name.toLowerCase().endsWith(".docx")){
-
-   const mammoth=await import("mammoth/mammoth.browser");
-
-   text=(await mammoth.extractRawText({
-    arrayBuffer:await file.arrayBuffer()
-   })).value;
-
-  }else if(file.name.toLowerCase().endsWith(".txt")){
-
-   text=await file.text();
-
-  }else{
-
-   throw Error("Formato no válido. Usa PDF, DOCX o TXT.");
-
-  }
-
-  if(text.trim().length<20){
-   throw Error("No se ha extraído texto suficiente.");
-  }
-
-  if(text.length>90000){
-   throw Error("Documento demasiado largo. Divídelo en partes.");
-  }
-
-  Material(text);
-
-  const marks=(text.match(/\[RESPUESTA_MARCADA\]/g)||[]).length;
-
-  M(`Documento leído. Marcas detectadas: ${marks}.`);
-
- }catch(e:any){
-  M(e.message);
- }
-}
- async function generate(){if(!token)return;Busy(true);try{const questions=parseTest(material);if(!questions.length)throw Error("No se detectaron preguntas numeradas con opciones A), B), C)… Prueba un TXT o Word con ese formato, o añade preguntas manualmente.");Draft(questions);M(`Detectadas ${questions.length} preguntas. Comprueba que no falte ninguna y revisa todas las soluciones.`)}catch(e:any){M(e.message)}finally{Busy(false)}}
+ async function readFile(file?:File){if(!file)return;Material("");Draft([]);Source(file.name);Title(file.name.replace(/\.[^.]+$/,""));M("Leyendo documento…");try{let text="";if(file.name.toLowerCase().endsWith(".pdf")){const pdfjs=await import("pdfjs-dist");pdfjs.GlobalWorkerOptions.workerSrc=`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise;let pages=[];for(let i=1;i<=pdf.numPages;i++){const p=await pdf.getPage(i),c=await p.getTextContent();pages.push(c.items.map((x:any)=>(x.str||"")+(x.hasEOL?"\n":" ")).join(""))}text=pages.join("\n")}else if(file.name.toLowerCase().endsWith(".docx")){const mammoth=await import("mammoth/mammoth.browser");text=(await mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()})).value}else if(file.name.toLowerCase().endsWith(".txt"))text=await file.text();else throw Error("Formato no válido. Usa PDF, DOCX o TXT.");if(text.trim().length<20)throw Error("No se ha extraído texto suficiente. Si el PDF es un escaneo, necesita OCR.");if(text.length>90000)throw Error("Documento demasiado largo. Divídelo en partes.");Material(text);M(`Documento leído: ${text.length.toLocaleString("es-ES")} caracteres.`)}catch(e:any){M(e.message)}}
+ async function generate(){if(!token)return;Busy(true);try{const questions=parseTest(material);if(!questions.length)throw Error("No se detectaron preguntas numeradas con opciones A), B), C)… Prueba un TXT o Word con ese formato, o añade preguntas manualmente.");Draft(questions);M(`Detectadas ${questions.length} preguntas. Respuestas identificadas: ${questions.filter(q=>q.correctIndex>=0).length}. Revisa las soluciones.`)}catch(e:any){M(e.message)}finally{Busy(false)}}
  async function saveImport(){if(busy||!draft.length||draft.some(q=>q.correctIndex<0||q.correctIndex>=q.options.length||!q.question.trim()||q.options.some(o=>!o.trim())))return;Busy(true);try{const saved=await supabase.from("tests").insert({title:title.trim()||"Test importado",source_name:source,questions:draft});if(saved.error)throw saved.error;Draft([]);await refresh();V("library");M("Test importado correctamente.")}catch(e:any){M(e.message)}finally{Busy(false)}}
  function open(t:T){Active(t);const arr=[...t.questions];if(shuffle)arr.sort(()=>Math.random()-.5);Qs(arr);A({});Done(false);Score(null);Seconds(limit*60);V("exam")}
  async function finish(){if(done||!active)return;Done(true);const valid=qs.filter(q=>q.correctIndex>=0),correct=qs.reduce((n,q,i)=>n+(q.correctIndex>=0&&answers[i]===q.correctIndex?1:0),0),grade=valid.length?Math.round(correct/valid.length*1000)/100:0;Score({correct,total:valid.length||qs.length,grade});await supabase.from("results").insert({test_id:active.id,test_title:active.title,score:grade,correct,total:valid.length||qs.length});refresh()}
