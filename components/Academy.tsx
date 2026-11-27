@@ -7,29 +7,118 @@ type T={id:string;title:string;source_name:string;questions:Q[];created_at:strin
 type R={id:string;test_title:string;score:number;correct:number;total:number;created_at:string};
 
 function parseTest(raw:string):Q[]{
- const text=raw.replace(/\\n/g,"\n").replace(/\r/g,"\n").replace(/\u00a0/g," ");
+ const text=raw
+  .replace(/\\n/g,"\n")
+  .replace(/\r/g,"\n")
+  .replace(/\u00a0/g," ")
+  .replace(/^\s*\d{1,3}\s*$/gm,"");
+
  const key:Record<number,string>={};
- const section=text.match(/(?:^|\n)\s*(?:plantilla\s+de\s+respuestas|soluciones|respuestas correctas|clave de respuestas)\s*[:.]?\s*(?:\n|$)/i);
  let body=text;
- if(section&&section.index!==undefined){const tail=text.slice(section.index+section[0].length);for(const m of tail.matchAll(/\b(\d{1,4})\s*[.)\-:–]?\s*([a-j])\b/gi))key[+m[1]]=m[2].toLowerCase();if(Object.keys(key).length)body=text.slice(0,section.index);}
- const starts=[...body.matchAll(/(?:^|\n)\s*(?:pregunta\s+)?(\d{1,4})\s*[.)º:\-–]\s*(?=\S)/gi)];
- const out:Q[]=[];
- for(let i=0;i<starts.length;i++){
-  const m=starts[i], start=m.index!+m[0].length, end=starts[i+1]?.index??body.length;
-  let block=body.slice(start,end).trim();
-  const solution=block.match(/(?:^|\n|\s)(?:respuesta\s+correcta|soluci[oó]n|correcta)\s*[:=\-]\s*([a-j])\b[^\n]*/i);
-  if(solution&&solution.index!==undefined)block=block.slice(0,solution.index).trim();
-  const opts=[...block.matchAll(/(?:^|\s)([a-j])\s*[.)\-:]\s*(?=\S)/gi)];
-  const first=opts.findIndex(o=>o[1].toLowerCase()==="a");if(first<0)continue;
-  const seq=[opts[first]];for(let j=first+1;j<opts.length;j++){if(opts[j][1].toLowerCase()===String.fromCharCode(97+seq.length))seq.push(opts[j]);}
-  if(seq.length<2)continue;
-  const question=block.slice(0,seq[0].index).trim();
-  const options=seq.map((o,j)=>block.slice(o.index!+o[0].length,seq[j+1]?.index??block.length).replace(/\s+/g," ").trim());
-  if(!question||options.some(o=>!o))continue;
-  const letter=solution?.[1].toLowerCase()||key[+m[1]];const idx=letter?letter.charCodeAt(0)-97:-1;
-  const correctIndex=idx>=0&&idx<options.length?idx:-1;
-  out.push({question:question.replace(/\s+/g," "),options,correctIndex,explanation:correctIndex<0?"Solución no detectada: selecciónala manualmente.":"Solución extraída del texto; compruébala."});
+
+ const section=text.match(
+  /(?:^|\n)[ \t]*(?:plantilla de respuestas|soluciones|respuestas correctas|clave de respuestas)[ \t]*[:.]?[ \t]*(?:\n|$)/i
+ );
+
+ if(section&&section.index!==undefined){
+  const tail=text.slice(section.index+section[0].length);
+  for(const m of tail.matchAll(/\b(\d{1,4})\s*[.)\-:–]?\s*([a-j])\b/gi)){
+   key[+m[1]]=m[2].toLowerCase();
+  }
+  if(Object.keys(key).length){
+   body=text.slice(0,section.index);
+  }
  }
+
+ const starts=[...body.matchAll(
+  /(?:^|\n)[ \t]*(?:pregunta\s+)?(\d{1,4})[.)º:\-–][ \t]+(?=\S)/gi
+ )];
+
+ const out:Q[]=[];
+
+ for(let i=0;i<starts.length;i++){
+  const m=starts[i];
+  const start=m.index!+m[0].length;
+  const end=starts[i+1]?.index??body.length;
+  let block=body.slice(start,end).trim();
+
+  const solution=block.match(
+   /(?:^|\n|\s)(?:respuesta\s+correcta|soluci[oó]n|correcta)\s*[:=\-]\s*([a-j])\b/i
+  );
+
+  if(solution&&solution.index!==undefined){
+   block=block.slice(0,solution.index).trim();
+  }
+
+  const opts=[...block.matchAll(
+   /(?:^|\n)[ \t]*([a-j])[.)\-:][ \t]*(?=\S)/gi
+  )];
+
+  const first=opts.findIndex(
+   o=>o[1].toLowerCase()==="a"
+  );
+
+  if(first<0)continue;
+
+  const seq=[opts[first]];
+
+  for(let j=first+1;j<opts.length;j++){
+   if(opts[j][1].toLowerCase()===String.fromCharCode(97+seq.length)){
+    seq.push(opts[j]);
+   }
+  }
+
+  if(seq.length<2)continue;
+
+  const question=block.slice(0,seq[0].index)
+   .replace(/\s+/g," ").trim();
+
+  let explanation="";
+  const detected:number[]=[];
+
+  const options=seq.map((o,j)=>{
+   let value=block.slice(
+    o.index!+o[0].length,
+    seq[j+1]?.index??block.length
+   ).replace(/\s+/g," ").trim();
+
+   const mark=value.match(
+    /\s+(?=(?:Constituci[oó]n Espa[ñn]ola de 1978\s*:|Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|La Constituci[oó]n Espa[ñn]ola de 1978 fue\s*:|La Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|Caracter[ií]sticas generales de la Constituci[oó]n|Explicaci[oó]n\s*:|Justificaci[oó]n\s*:))/i
+   );
+
+   if(mark&&mark.index!==undefined){
+    detected.push(j);
+    explanation=value.slice(mark.index).trim();
+    value=value.slice(0,mark.index).trim();
+   }
+
+   return value;
+  });
+
+  if(!question||options.some(o=>!o))continue;
+
+  const letter=solution?.[1].toLowerCase()||key[+m[1]];
+
+  let correctIndex=letter
+   ?letter.charCodeAt(0)-97
+   :detected.length===1?detected[0]:-1;
+
+  if(correctIndex<0||correctIndex>=options.length){
+   correctIndex=-1;
+  }
+
+  out.push({
+   question,
+   options,
+   correctIndex,
+   explanation:explanation||(
+    correctIndex<0
+    ?"Solución no detectada: selecciónala manualmente."
+    :"Respuesta detectada automáticamente."
+   )
+  });
+ }
+
  return out;
 }
 
