@@ -134,7 +134,211 @@ export default function Academy(){
  useEffect(()=>{if(view!=="exam"||done||seconds<=0)return;const id=setInterval(()=>Seconds(s=>{if(s<=1){clearInterval(id);finish();return 0}return s-1}),1000);return()=>clearInterval(id)},[view,done,seconds>0]);
  async function refresh(){const [t,r]=await Promise.all([supabase.from("tests").select("*").order("created_at",{ascending:false}),supabase.from("results").select("*").order("created_at",{ascending:false}).limit(50)]);Tests(t.data||[]);Results(r.data||[])}
  async function auth(e:React.FormEvent){e.preventDefault();const x=signup?await supabase.auth.signUp({email,password}):await supabase.auth.signInWithPassword({email,password});M(x.error?.message|| (signup?"Cuenta creada. Revisa tu correo si se solicita confirmación.":""))}
- async function readFile(file?:File){if(!file)return;Material("");Draft([]);Source(file.name);Title(file.name.replace(/\.[^.]+$/,""));M("Leyendo documento…");try{let text="";if(file.name.toLowerCase().endsWith(".pdf")){const pdfjs=await import("pdfjs-dist");pdfjs.GlobalWorkerOptions.workerSrc=`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise;let pages=[];for(let i=1;i<=pdf.numPages;i++){const p=await pdf.getPage(i),c=await p.getTextContent();pages.push(c.items.map((x:any)=>(x.str||"")+(x.hasEOL?"\n":" ")).join(""))}text=pages.join("\n")}else if(file.name.toLowerCase().endsWith(".docx")){const mammoth=await import("mammoth/mammoth.browser");text=(await mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()})).value}else if(file.name.toLowerCase().endsWith(".txt"))text=await file.text();else throw Error("Formato no válido. Usa PDF, DOCX o TXT.");if(text.trim().length<20)throw Error("No se ha extraído texto suficiente. Si el PDF es un escaneo, necesita OCR.");if(text.length>90000)throw Error("Documento demasiado largo. Divídelo en partes.");Material(text);M(`Documento leído: ${text.length.toLocaleString("es-ES")} caracteres.`)}catch(e:any){M(e.message)}}
+ async function readFile(file?:File){
+ if(!file)return;
+
+ Material("");
+ Draft([]);
+ Source(file.name);
+ Title(file.name.replace(/\.[^.]+$/,""));
+ M("Leyendo documento…");
+
+ try{
+  let text="";
+
+  if(file.name.toLowerCase().endsWith(".pdf")){
+
+   const pdfjs=await import("pdfjs-dist");
+
+   pdfjs.GlobalWorkerOptions.workerSrc=
+    `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
+
+   const pdf=await pdfjs.getDocument({
+    data:await file.arrayBuffer()
+   }).promise;
+
+   const pages:string[]=[];
+
+   for(let i=1;i<=pdf.numPages;i++){
+
+    const p=await pdf.getPage(i);
+    const c=await p.getTextContent();
+    const annotations=await p.getAnnotations();
+
+    const viewport=p.getViewport({scale:2});
+    const canvas=document.createElement("canvas");
+
+    canvas.width=Math.ceil(viewport.width);
+    canvas.height=Math.ceil(viewport.height);
+
+    const ctx=canvas.getContext("2d",{
+     willReadFrequently:true
+    });
+
+    if(!ctx)throw Error("No se pudo analizar el PDF.");
+
+    await p.render({
+     canvasContext:ctx,
+     viewport
+    }).promise;
+
+    const pixels=ctx.getImageData(
+     0,0,canvas.width,canvas.height
+    ).data;
+
+    let pageText="";
+    let line="";
+    let marked=false;
+
+    for(const x of c.items as any[]){
+
+     if(!x.str||!x.transform)continue;
+
+     const px=x.transform[4];
+     const py=x.transform[5];
+     const w=x.width||0;
+     const h=x.height||10;
+
+     const annotated=annotations.some((a:any)=>{
+      if(!["Underline","Highlight"].includes(a.subtype))
+       return false;
+
+      const r=a.rect;
+      if(!r)return false;
+
+      return r[0]<px+w&&r[2]>px&&
+       r[1]<py+h&&r[3]>py-3;
+     });
+
+     const point=viewport.convertToViewportPoint(px,py);
+
+     const left=Math.max(0,Math.floor(point[0]));
+     const right=Math.min(
+      canvas.width-1,
+      Math.ceil(point[0]+w*2)
+     );
+
+     let underlined=false;
+     let highlighted=false;
+
+     if(right-left>12){
+
+      for(let offset=1;offset<=7;offset++){
+
+       const y=Math.round(point[1]+offset);
+
+       if(y<0||y>=canvas.height)continue;
+
+       let dark=0;
+
+       for(let xx=left;xx<right;xx++){
+
+        const k=(y*canvas.width+xx)*4;
+
+        if(pixels[k]<130&&
+           pixels[k+1]<130&&
+           pixels[k+2]<130){
+         dark++;
+        }
+       }
+
+       if(dark/(right-left)>0.75){
+        underlined=true;
+        break;
+       }
+      }
+
+      const y=Math.round(point[1]-h);
+
+      if(y>=0&&y<canvas.height){
+
+       let colored=0;
+
+       for(let xx=left;xx<right;xx++){
+
+        const k=(y*canvas.width+xx)*4;
+
+        const r=pixels[k];
+        const g=pixels[k+1];
+        const b=pixels[k+2];
+
+        if(Math.max(r,g,b)-Math.min(r,g,b)>45&&
+           Math.max(r,g,b)>150){
+         colored++;
+        }
+       }
+
+       highlighted=colored/(right-left)>0.5;
+      }
+     }
+
+     line+=x.str+" ";
+
+     if(annotated||underlined||highlighted){
+      marked=true;
+     }
+
+     if(x.hasEOL){
+
+      const clean=line.trim();
+
+      pageText+=clean+
+       (marked?" [RESPUESTA_MARCADA]":"")+"\n";
+
+      line="";
+      marked=false;
+     }
+    }
+
+    if(line.trim()){
+     pageText+=line.trim()+
+      (marked?" [RESPUESTA_MARCADA]":"")+"\n";
+    }
+
+    pages.push(pageText);
+
+    canvas.width=0;
+    canvas.height=0;
+   }
+
+   text=pages.join("\n");
+
+  }else if(file.name.toLowerCase().endsWith(".docx")){
+
+   const mammoth=await import("mammoth/mammoth.browser");
+
+   text=(await mammoth.extractRawText({
+    arrayBuffer:await file.arrayBuffer()
+   })).value;
+
+  }else if(file.name.toLowerCase().endsWith(".txt")){
+
+   text=await file.text();
+
+  }else{
+
+   throw Error("Formato no válido. Usa PDF, DOCX o TXT.");
+
+  }
+
+  if(text.trim().length<20){
+   throw Error("No se ha extraído texto suficiente.");
+  }
+
+  if(text.length>90000){
+   throw Error("Documento demasiado largo. Divídelo en partes.");
+  }
+
+  Material(text);
+
+  const marks=(text.match(/\[RESPUESTA_MARCADA\]/g)||[]).length;
+
+  M(`Documento leído. Marcas detectadas: ${marks}.`);
+
+ }catch(e:any){
+  M(e.message);
+ }
+}
  async function generate(){if(!token)return;Busy(true);try{const questions=parseTest(material);if(!questions.length)throw Error("No se detectaron preguntas numeradas con opciones A), B), C)… Prueba un TXT o Word con ese formato, o añade preguntas manualmente.");Draft(questions);M(`Detectadas ${questions.length} preguntas. Comprueba que no falte ninguna y revisa todas las soluciones.`)}catch(e:any){M(e.message)}finally{Busy(false)}}
  async function saveImport(){if(busy||!draft.length||draft.some(q=>q.correctIndex<0||q.correctIndex>=q.options.length||!q.question.trim()||q.options.some(o=>!o.trim())))return;Busy(true);try{const saved=await supabase.from("tests").insert({title:title.trim()||"Test importado",source_name:source,questions:draft});if(saved.error)throw saved.error;Draft([]);await refresh();V("library");M("Test importado correctamente.")}catch(e:any){M(e.message)}finally{Busy(false)}}
  function open(t:T){Active(t);const arr=[...t.questions];if(shuffle)arr.sort(()=>Math.random()-.5);Qs(arr);A({});Done(false);Score(null);Seconds(limit*60);V("exam")}
