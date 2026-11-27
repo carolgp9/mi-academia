@@ -1,3 +1,67 @@
+"use client";
+import {useEffect,useState,useRef} from "react";
+import {supabase} from "@/lib/supabase";
+
+type Q={question:string;options:string[];correctIndex:number;explanation:string};
+type T={id:string;title:string;source_name:string;questions:Q[];created_at:string};
+type ErrorRow={question_key:string;question:string;options:string[];correct_index:number;explanation:string;source_title:string;times_failed:number;consecutive_correct:number};
+function keyOf(q:Q){return JSON.stringify([q.question.trim().toLowerCase().replace(/\s+/g," "),q.options.map(x=>x.trim().toLowerCase()).sort()]);}
+function randomize<T,>(items:T[]):T[]{const a=[...items];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+type R={id:string;test_title:string;score:number;correct:number;total:number;created_at:string};
+
+function parseTest(raw:string):Q[]{
+ const text=raw.replace(/\\n/g,"\n").replace(/\r/g,"\n").replace(/\u00a0/g," ").replace(/\f/g,"\n").replace(/^[ \t]*\d{1,3}[ \t]*$/gm,"");
+ const key:Record<number,string>={};
+ let body=text;
+ const section=text.match(/(?:^|\n)[ \t]*(?:plantilla de respuestas|soluciones|respuestas correctas|clave de respuestas)[ \t]*[:.]?[ \t]*(?:\n|$)/i);
+ if(section&&section.index!==undefined){
+  for(const m of text.slice(section.index+section[0].length).matchAll(/\b(\d{1,4})\s*[.)\-:–]?\s*([a-j])\b/gi))key[+m[1]]=m[2].toLowerCase();
+  if(Object.keys(key).length)body=text.slice(0,section.index);
+ }
+ const candidates=[...body.matchAll(/(?:^|\n)[ \t]*(?:pregunta[ \t]+)?(\d{1,4})[ \t]*[.)º:\-–][ \t]*(?=\S)/gi)];
+ const starts:RegExpMatchArray[]=[];
+ for(const m of candidates){if(!starts.length||+m[1]===+starts[starts.length-1][1]+1)starts.push(m);}
+ const out:Q[]=[];
+ const clean=(s:string)=>s.replace(/\s+/g," ").trim();
+ const marker=/\s+(?=(?:Constituci[oó]n\s+Espa[ñn]ola\s+de\s+1978\s*:|(?:La\s+)?Constituci[oó]n\s+Espa[ñn]ola\s+de\s+1978\s+(?:fue\s*:|est[aá]\s+compuesta)|Caracter[ií]sticas\s+generales\s+de\s+la\s+Constituci[oó]n|Explicaci[oó]n\s*:|Justificaci[oó]n\s*:))/i;
+ for(let i=0;i<starts.length;i++){
+  const m=starts[i];let block=body.slice(m.index!+m[0].length,starts[i+1]?.index??body.length).trim();
+  const sol=block.match(/(?:^|\n|\s)(?:respuesta\s+correcta|soluci[oó]n|correcta)\s*[:=\-]\s*([a-j])\b/i);
+  let explanation=sol?clean(block.slice(sol.index!+sol[0].length)).replace(/^\s*[.:–-]\s*/,""):"";
+  if(sol)block=block.slice(0,sol.index).trim();
+  const all=[...block.matchAll(/(?:^|\s)([a-j])[ \t]*[.)\-:][ \t]*(?=\S)/gi)];
+  const first=all.findIndex(o=>o[1].toLowerCase()==="a");if(first<0)continue;
+  const seq=[all[first]];
+  for(const o of all.slice(first+1)){
+   if(o[1].toLowerCase()!==String.fromCharCode(97+seq.length))continue;
+   const prev=seq[seq.length-1];const before=block.slice(prev.index!+prev[0].length,o.index);
+   // In this corrected format, an explanation may contain its own lettered list.
+   if(marker.test(before)&&seq.length>=3&&!/^\n[ \t]*[a-j][.)]/i.test(o[0]))continue;
+   if(marker.test(before)&&seq.length>=3&&/\bConstituci[oó]n\s+Espa[ñn]ola\s+de\s+1978/i.test(before))continue;
+   seq.push(o);
+  }
+  if(seq.length<2)continue;
+  const question=clean(block.slice(0,seq[0].index));const detected:number[]=[];
+  const options=seq.map((o,j)=>{let value=clean(block.slice(o.index!+o[0].length,seq[j+1]?.index??block.length));const mark=value.match(marker);if(mark&&mark.index!==undefined){detected.push(j);explanation=value.slice(mark.index).trim();value=value.slice(0,mark.index).trim();}return value;});
+  if(!question||options.some(o=>!o))continue;
+  const letter=sol?.[1].toLowerCase()||key[+m[1]];const idx=letter?letter.charCodeAt(0)-97:detected.length===1?detected[0]:-1;
+  const correctIndex=idx>=0&&idx<options.length?idx:-1;
+  out.push({question,options,correctIndex,explanation:explanation||(correctIndex<0?"Solución no detectada: selecciónala manualmente.":"Respuesta detectada automáticamente; compruébala.")});
+ }
+ return out;
+}
+
+function dailyDate(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function seeded<T,>(items:T[],seed:string):T[]{let h=2166136261;for(const c of seed)h=Math.imul(h^c.charCodeAt(0),16777619);const a=[...items];for(let i=a.length-1;i>0;i--){h=(Math.imul(h,1664525)+1013904223)>>>0;const j=h%(i+1);[a[i],a[j]]=[a[j],a[i]];}return a;}
+function correctionStyle(correct:boolean,selected:boolean):import("react").CSSProperties{
+ return correct?{backgroundColor:"#dcfce7",color:"#14532d",border:"1px solid #16a34a",opacity:1}:selected?{backgroundColor:"#fee2e2",color:"#991b1b",border:"1px solid #dc2626",opacity:1}:{};
+}
+
+export default function Academy(){
+ const [session,S]=useState<any>(null),[ready,Ready]=useState(false),[email,E]=useState(""),[password,P]=useState(""),[signup,Signup]=useState(false);
+ const [tests,Tests]=useState<T[]>([]),[results,Results]=useState<R[]>([]),[view,V]=useState("library"),[msg,M]=useState("");
+ const [title,Title]=useState(""),[source,Source]=useState(""),[material,Material]=useState(""),[count,Count]=useState(30),[difficulty,Difficulty]=useState("mixta"),[busy,Busy]=useState(false);
+ const [active,Active]=useState<T|null>(null),[qs,Qs]=useState<Q[]>([]),[answers,A]=useState<Record<number,number>>({}),[mode,Mode]=useState("exam"),[shuffle,Shuffle]=useState(true),[limit,Limit]=useState(0),[seconds,Seconds]=useState(0),[done,Done]=useState(false),[score,Score]=useState<any>(null);
  const [importing,Importing]=useState(true),[draft,Draft]=useState<Q[]>([]);
  const [errors,Errors]=useState<ErrorRow[]>([]),[simCount,SimCount]=useState(100),[simTime,SimTime]=useState(90),[penalty,Penalty]=useState(1/3),[mix,Mix]=useState(true),[kind,Kind]=useState("normal");
  const [dailyCount,DailyCount]=useState(50),[dailyMode,DailyMode]=useState("exam"),[dailyHistory,DailyHistory]=useState<R[]>([]);
