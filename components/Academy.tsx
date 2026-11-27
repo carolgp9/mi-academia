@@ -81,6 +81,11 @@ function parseTest(raw:string):Q[]{
     o.index!+o[0].length,
     seq[j+1]?.index??block.length
    ).replace(/\s+/g," ").trim();
+   
+      if(value.includes("[RESPUESTA_MARCADA]")){
+    detected.push(j);
+    value=value.replace(/\[RESPUESTA_MARCADA\]/g,"").trim();
+   }
 
    const mark=value.match(
     /\s+(?=(?:Constituci[oó]n Espa[ñn]ola de 1978\s*:|Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|La Constituci[oó]n Espa[ñn]ola de 1978 fue\s*:|La Constituci[oó]n Espa[ñn]ola de 1978 est[aá] compuesta|Caracter[ií]sticas generales de la Constituci[oó]n|Explicaci[oó]n\s*:|Justificaci[oó]n\s*:))/i
@@ -101,7 +106,7 @@ function parseTest(raw:string):Q[]{
 
   let correctIndex=letter
    ?letter.charCodeAt(0)-97
-   :detected.length===1?detected[0]:-1;
+   :new Set(detected).size===1?detected[0]:-1;
 
   if(correctIndex<0||correctIndex>=options.length){
    correctIndex=-1;
