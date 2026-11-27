@@ -105,8 +105,3 @@ export default function Academy(){
  {view==="results"&&<section className="panel"><h2>Mi progreso</h2>{results.length===0?<p className="muted">Todavía no has realizado exámenes.</p>:results.map(r=><div className="history" key={r.id}><b>{r.test_title}</b><span>{new Date(r.created_at).toLocaleDateString("es-ES")}</span><strong>{Number(r.score).toFixed(1)}/10</strong></div>)}</section>}
  <footer>MI ACADEMIA · Tu esfuerzo, tu progreso.</footer></main></div>
 }
-
-
-
-
-45%
